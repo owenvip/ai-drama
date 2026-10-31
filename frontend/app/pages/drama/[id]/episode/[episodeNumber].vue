@@ -897,15 +897,24 @@
                   <section class="video-inspector-section">
                     <div class="video-inspector-prompt-head">
                       <span class="video-inspector-label video-inspector-label-hero">视频提示词</span>
-                      <button
-                        type="button"
-                        class="btn btn-sm"
-                        :disabled="rn || videoPromptBatch.running"
-                        @click="genVideoPrompt(selectedSb)"
-                      >
-                        <Loader2 v-if="rn && rt === 'prompt_generator'" :size="11" class="animate-spin" />
-                        {{ (selectedSb.video_prompt || selectedSb.videoPrompt) ? '重新生成' : 'AI 生成' }}
-                      </button>
+                      <div class="video-inspector-prompt-head-actions">
+                        <button
+                          v-if="canUndoVideoPrompt"
+                          type="button"
+                          class="btn btn-sm btn-ghost"
+                          title="恢复 AI 调整前的提示词"
+                          @click="undoVideoPrompt(selectedSb)"
+                        >撤销调整</button>
+                        <button
+                          type="button"
+                          class="btn btn-sm"
+                          :disabled="rn || videoPromptBatch.running"
+                          @click="genVideoPrompt(selectedSb)"
+                        >
+                          <Loader2 v-if="rn && rt === 'prompt_generator'" :size="11" class="animate-spin" />
+                          {{ (selectedSb.video_prompt || selectedSb.videoPrompt) ? '重新生成' : 'AI 生成' }}
+                        </button>
+                      </div>
                     </div>
                     <MentionTextarea
                       :model-value="selectedSb.video_prompt || selectedSb.videoPrompt || ''"
@@ -977,6 +986,52 @@
                         <input v-model.number="videoDuration" type="number" min="4" max="15" class="input video-duration-input" />
                         <span class="video-param-unit">s（4-15）</span>
                       </span>
+                    </div>
+                  </section>
+
+                  <section class="video-inspector-section video-issue-section">
+                    <button type="button" class="video-issue-head" @click="videoIssueOpen = !videoIssueOpen">
+                      <span class="video-inspector-label video-inspector-label-hero">视频有问题？</span>
+                      <span class="video-issue-head-sub">描述问题，让 AI 改提示词</span>
+                      <svg :class="['video-issue-chevron', videoIssueOpen && 'is-open']" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                    </button>
+                    <div v-if="videoIssueOpen" class="video-issue-body">
+                      <textarea
+                        v-model="videoIssueDraft"
+                        class="textarea video-issue-input"
+                        rows="3"
+                        placeholder="哪里不对？例如：人物手部变形、动作太快看不清、画面偏暗、运镜混乱、没按 3 秒分段…也可以写期望的效果"
+                      />
+                      <div class="video-issue-chips">
+                        <button
+                          v-for="preset in VIDEO_ISSUE_PRESETS"
+                          :key="preset"
+                          type="button"
+                          class="video-issue-chip"
+                          @click="appendVideoIssue(preset)"
+                        >{{ preset }}</button>
+                      </div>
+                      <div class="video-issue-actions">
+                        <button
+                          type="button"
+                          class="btn btn-sm"
+                          :disabled="!videoIssueDraft.trim() || rn || videoTaskState(selectedSb) === 'pending'"
+                          @click="reviseVideoPrompt(selectedSb, false)"
+                        >
+                          <Loader2 v-if="revisingVideoPrompt" :size="11" class="animate-spin" />
+                          AI 调整提示词
+                        </button>
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-primary"
+                          :disabled="!videoIssueDraft.trim() || rn || videoTaskState(selectedSb) === 'pending'"
+                          @click="reviseVideoPrompt(selectedSb, true)"
+                        >
+                          <Loader2 v-if="revisingVideoPrompt" :size="11" class="animate-spin" />
+                          调整并重新生成
+                        </button>
+                      </div>
+                      <p class="video-issue-hint">AI 结合当前提示词与反馈定向改写（保留 @角色 / @场景 引用与时序分段），可先在提示词框确认后再生成。</p>
                     </div>
                   </section>
 
@@ -2822,6 +2877,110 @@ function genVideoPrompt(sb) {
 该分镜信息:时长 ${sb.duration || 10}s;场景:${getSceneName(sb) || '未绑定'};角色:${charNames};道具:${propNames}。
 
 请先调用 read_storyboard_context 获取该分镜的画面描述、动作、氛围、对白/旁白,据此生成 video_prompt(按 3 秒分段换行、用 @角色名/@场景名/@道具名 引用参考素材),然后调用 update_storyboard 保存到分镜 ID:${sb.id}。只更新 video_prompt 字段,不要改动其他字段,不要重新拆分整集。`, dramaId, epId.value, refresh, chatModelOverride(), chatConfigId())
+}
+
+// ===== 视频有问题 → 按反馈调整提示词 =====
+const VIDEO_ISSUE_PRESETS = ['人物变形', '动作太快', '画面偏暗', '运镜混乱', '细节不符剧情', '时长不对']
+const videoIssueOpen = ref(false)
+const videoIssueDraft = ref('')
+const revisingVideoPrompt = ref(false)
+
+/** 调整前的提示词快照，支持一步撤销 { [storyboardId]: prompt } */
+const videoPromptUndo = ref({})
+const canUndoVideoPrompt = computed(() => {
+  const id = selectedSb.value?.id
+  return id !== undefined && videoPromptUndo.value[id] !== undefined
+})
+
+/** 快捷问题标签：去重后追加到反馈文本 */
+function appendVideoIssue(text) {
+  const current = videoIssueDraft.value.trim()
+  if (current.includes(text)) return
+  videoIssueDraft.value = current ? `${current}；${text}` : text
+}
+
+// 切换分镜时清空上一条问题反馈，避免反馈串到别的镜头
+watch(() => selectedSb.value?.id, () => {
+  if (revisingVideoPrompt.value) return
+  videoIssueDraft.value = ''
+  videoIssueOpen.value = false
+})
+
+/** 撤销上一次 AI 调整，恢复到调整前的提示词 */
+function undoVideoPrompt(sb) {
+  if (!sb) return
+  const prev = videoPromptUndo.value[sb.id]
+  if (prev === undefined) return
+  updateField(sb, 'video_prompt', prev)
+  const next = { ...videoPromptUndo.value }
+  delete next[sb.id]
+  videoPromptUndo.value = next
+  toast.success('已恢复调整前的提示词')
+}
+
+/**
+ * 按用户反馈定向调整分镜视频提示词
+ * thenRegenerate=true 时调整成功后直接用新提示词重新生成视频
+ */
+async function reviseVideoPrompt(sb, thenRegenerate = false) {
+  if (!sb || revisingVideoPrompt.value) return
+  const issue = videoIssueDraft.value.trim()
+  if (!issue) {
+    videoIssueOpen.value = true
+    toast.warning('请先描述视频存在的问题')
+    return
+  }
+  if (rn.value) { toast.warning('操作执行中'); return }
+  if (thenRegenerate && videoTaskState(sb) === 'pending') { toast.info('该分镜正在生成中，请稍后重试'); return }
+
+  const targetId = sb.id
+  const idx = videoTaskRows.value.findIndex(t => String(t.id) === String(targetId)) + 1
+  const currentPrompt = (sb.video_prompt || sb.videoPrompt || '').trim()
+  const cfg = videoConfigs.value.find(c => c.id === lockedVideoConfigId.value)
+  const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
+
+  revisingVideoPrompt.value = true
+  try {
+    const result = await runAgent('prompt_generator', `请按用户反馈修正分镜 #${idx}(ID:${targetId}) 已有的视频提示词(video_prompt)。视频模型:${label},请遵循该模型的镜头特性与时长限制。
+
+当前 video_prompt:
+"""
+${currentPrompt || '（暂无,请按分镜内容重新创作）'}
+"""
+
+用户反馈(视频存在的问题/期望):
+${issue}
+
+要求:
+1. 先调用 read_storyboard_context 读取该分镜的画面描述、动作、氛围、对白/旁白与时长,确认画面事实
+2. 只针对反馈中提到的问题做定向修正,保留原有正确内容;继续按 3 秒分段换行、时间轴总和等于分镜时长 ${sb.duration || 10}s
+3. @角色名 / @场景名 / @道具名 必须与分镜已绑定的素材名称完全一致,不要新增未绑定的引用
+4. 调用 update_storyboard 仅更新分镜 ID:${targetId} 的 video_prompt,不要改动其他字段,不要重新拆分整集`, dramaId, epId.value, refresh, chatModelOverride(), chatConfigId(), { silent: true })
+
+    if (!result) return
+    // Agent 已完成写库，refresh 后按 id 取最新分镜（selectedSb 也会被 refresh 重新指向）
+    await refresh()
+    const fresh = sbs.value.find(s => String(s.id) === String(targetId))
+    const nextPrompt = (fresh?.video_prompt || fresh?.videoPrompt || '').trim()
+    if (!nextPrompt) throw new Error('提示词调整失败，请重试')
+
+    const changed = nextPrompt !== currentPrompt
+    if (!changed) {
+      toast.info('提示词没有变化，可补充更具体的问题描述后再试')
+      return
+    }
+    toast.success('提示词已按反馈调整')
+    // 记录调整前的提示词，便于一键撤销
+    if (currentPrompt) videoPromptUndo.value = { ...videoPromptUndo.value, [targetId]: currentPrompt }
+    videoIssueDraft.value = ''
+    videoIssueOpen.value = false
+
+    if (thenRegenerate && fresh) await genVid(fresh)
+  } catch (e) {
+    toast.error(e.message || '提示词调整失败')
+  } finally {
+    revisingVideoPrompt.value = false
+  }
 }
 
 function sleep(ms) {
@@ -5360,6 +5519,12 @@ onMounted(async () => { await refresh(); loadConfigs(); syncExtractStatus() })
   justify-content: space-between;
   gap: 8px;
 }
+.video-inspector-prompt-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
 /* MentionTextarea 内部元素需 :deep 穿透（scoped 样式默认到不了子组件内部） */
 :deep(.video-inspector-prompt) {
   min-height: 176px;
@@ -5402,6 +5567,84 @@ onMounted(async () => { await refresh(); loadConfigs(); syncExtractStatus() })
 .video-inspector-params dt { color: var(--text-3); }
 .video-inspector-params dd { margin: 0; color: var(--text-1); text-align: right; }
 .video-inspector-action { width: 100%; }
+/* 视频有问题 → 反馈调整提示词 */
+.video-issue-section {
+  padding: 10px 12px;
+  border: 1px dashed var(--surface-outline);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+.video-issue-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.video-issue-head-sub {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.video-issue-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform .15s ease;
+}
+.video-issue-chevron.is-open { transform: rotate(180deg); }
+.video-issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 9px;
+}
+.video-issue-input {
+  width: 100%;
+  resize: vertical;
+  font-size: 12px;
+  line-height: 1.5;
+  min-height: 62px;
+}
+.video-issue-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.video-issue-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--surface-outline);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--text-2);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.video-issue-chip:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.video-issue-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.video-issue-actions .btn { flex: 1; justify-content: center; }
+.video-issue-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 1.5;
+}
 .video-ref-media-list { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 .video-ref-media-chip {
   display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
