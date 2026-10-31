@@ -234,17 +234,16 @@
                   {{ (t.key === 'characters' ? chars.length : t.key === 'scenes' ? scenes.length : propItems.length) ? `重提${t.label}` : `提取${t.label}` }}
                 </button>
                 <span class="asset-bar-divider" />
-                <button class="btn btn-sm asset-btn-batch" @click="batchCharImages">
+                <button
+                  v-for="t in BATCH_TARGETS"
+                  :key="t.type"
+                  class="btn btn-sm asset-btn-batch"
+                  :title="`批量处理${t.label}：可选择只生成提示词或直接生成图片`"
+                  @click="openBatchDialog(t.type)"
+                >
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                  批量角色
-                </button>
-                <button class="btn btn-sm asset-btn-batch" @click="batchSceneImages">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                  批量场景
-                </button>
-                <button class="btn btn-sm asset-btn-batch" @click="batchPropImages">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                  批量道具
+                  批量{{ t.label }}
+                  <svg class="asset-btn-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
                 </button>
               </div>
             </div>
@@ -1609,6 +1608,91 @@
             </button>
           </footer>
         </div>
+      </div>
+
+      <div v-if="batchDialog.open" class="overlay" @click.self="closeBatchDialog">
+        <section class="dialog batch-dialog" role="dialog" aria-modal="true" :aria-label="`批量生成${batchTypeLabel}`">
+          <header class="dialog-head">
+            <h2 class="dialog-title">批量生成{{ batchTypeLabel }}</h2>
+            <span class="tag mono" style="margin-left:auto">{{ batchStat.total }} 个资产</span>
+            <button class="btn btn-ghost btn-icon" :disabled="batchDialog.running" @click="closeBatchDialog">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </header>
+
+          <div class="dialog-body batch-dialog-body">
+            <p class="batch-dialog-hint">
+              选择本次要对{{ batchTypeLabel }}执行的动作：只生成最终提示词，或直接生成图片。
+            </p>
+
+            <div class="batch-mode-grid">
+              <button
+                type="button"
+                class="batch-mode-card"
+                :class="{ active: batchDialog.mode === 'prompt' }"
+                :disabled="batchDialog.running"
+                @click="batchDialog.mode = 'prompt'"
+              >
+                <span class="batch-mode-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  生成提示词
+                </span>
+                <span class="batch-mode-desc">只生成最终提示词，不消耗图片模型；可先确认提示词再出图</span>
+                <span class="batch-mode-count">{{ batchModeCount('prompt') }} 个待处理</span>
+              </button>
+
+              <button
+                type="button"
+                class="batch-mode-card"
+                :class="{ active: batchDialog.mode === 'image' }"
+                :disabled="batchDialog.running"
+                @click="batchDialog.mode = 'image'"
+              >
+                <span class="batch-mode-title">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                  生成图片
+                </span>
+                <span class="batch-mode-desc">直接出图；缺少提示词的资产会先生成提示词再出图</span>
+                <span class="batch-mode-count">{{ batchModeCount('image') }} 个待处理</span>
+              </button>
+            </div>
+
+            <label class="batch-force-row" :class="{ disabled: batchDialog.running }">
+              <input v-model="batchDialog.force" type="checkbox" :disabled="batchDialog.running" />
+              <span class="batch-force-copy">
+                <span class="batch-force-title">
+                  {{ batchDialog.mode === 'prompt' ? '重新生成已有提示词' : '重新生成已有图片' }}
+                </span>
+                <span class="batch-force-hint">不勾选时只处理缺失的部分（缺提示词 {{ batchStat.missingPrompt }} 个 · 缺图片 {{ batchStat.missingImage }} 个）</span>
+              </span>
+            </label>
+
+            <p v-if="!batchTargets.length && !batchDialog.running" class="batch-dialog-empty">
+              {{ batchDialog.mode === 'prompt' ? '所有资产都已有最终提示词，可勾选上方选项重新生成。' : '所有资产都已有图片，可勾选上方选项重新生成。' }}
+            </p>
+
+            <div v-if="batchDialog.running" class="batch-progress">
+              <template v-if="batchDialog.mode === 'prompt'">
+                <div class="progress"><i :style="{ width: batchProgressPercent + '%' }" /></div>
+                <span class="dim mono">{{ batchDialog.completed }}/{{ batchDialog.total }}</span>
+              </template>
+              <span v-else class="batch-progress-submitting">
+                <Loader2 :size="12" class="animate-spin" />
+                正在提交 {{ batchDialog.total }} 张图片的生成任务，可在资产卡片查看生成进度
+              </span>
+            </div>
+          </div>
+
+          <footer class="dialog-foot">
+            <button class="btn" :disabled="batchDialog.running" @click="closeBatchDialog">取消</button>
+            <button class="btn btn-primary" :disabled="batchDialog.running || !batchTargets.length" @click="startBatchGenerate">
+              <Loader2 v-if="batchDialog.running" :size="12" class="animate-spin" />
+              {{ batchDialog.running
+                ? (batchDialog.mode === 'prompt' ? `处理中 ${batchDialog.completed}/${batchDialog.total}` : '提交中…')
+                : (batchDialog.mode === 'prompt' ? `批量生成提示词（${batchTargets.length}）` : `批量生成图片（${batchTargets.length}）`) }}
+            </button>
+          </footer>
+        </section>
       </div>
 
       <ConfirmDialog
@@ -3043,23 +3127,165 @@ async function genCharImg(id) {
     toast.error(e.message)
   }
 }
-function batchCharImages() {
-  const ids = visualChars.value.filter(c => !(c.image_url || c.imageUrl)).map(c => c.id)
-  if (!ids.length) { toast.info('所有角色图片已生成'); return }
-  pendingCharImageIds.value = [...new Set([...pendingCharImageIds.value, ...ids])]
-  characterAPI.batchImages(ids, epId.value, imageModel.value || undefined, ownerConfigId(imageModelOptions.value, imageModel.value), chatModelOverride(), chatConfigId()).then(async () => {
-    toast.success('角色图片批量生成中')
-    await refresh()
-    watchAsyncResult(() => ids.every(id => {
-      const char = chars.value.find(c => c.id === id)
-      const done = !!(char?.image_url || char?.imageUrl)
-      if (done) pendingCharImageIds.value = pendingCharImageIds.value.filter(item => item !== id)
-      return done
-    }), 36)
-  }).catch(e => {
-    pendingCharImageIds.value = pendingCharImageIds.value.filter(item => !ids.includes(item))
-    toast.error(e.message)
+// ===== 资产批量生成：用户可选择「生成提示词」或「生成图片」=====
+const BATCH_TARGETS = [
+  { type: 'character', label: '角色' },
+  { type: 'scene', label: '场景' },
+  { type: 'prop', label: '道具' },
+]
+const batchDialog = ref({
+  open: false,
+  type: 'character',
+  mode: 'prompt',
+  force: false,
+  running: false,
+  completed: 0,
+  total: 0,
+})
+
+/** 当前集的资产列表（角色不含旁白，与页面展示保持一致） */
+function batchAssetList(type) {
+  return type === 'character' ? visualChars.value : type === 'scene' ? scenes.value : propItems.value
+}
+function assetHasPrompt(item) { return !!(item?.final_prompt || item?.finalPrompt) }
+function assetHasImage(item) { return !!(item?.image_url || item?.imageUrl) }
+function assetImageUrl(item) { return item?.image_url || item?.imageUrl || '' }
+
+/** 按「类型 + 动作 + 是否重新生成」筛出本次要处理的资产 */
+function batchPick(type, mode, force) {
+  const list = batchAssetList(type)
+  if (force) return list
+  return list.filter(a => (mode === 'prompt' ? !assetHasPrompt(a) : !assetHasImage(a)))
+}
+
+const batchTypeLabel = computed(() => BATCH_TARGETS.find(t => t.type === batchDialog.value.type)?.label || '资产')
+const batchStat = computed(() => {
+  const list = batchAssetList(batchDialog.value.type)
+  return {
+    total: list.length,
+    missingPrompt: list.filter(a => !assetHasPrompt(a)).length,
+    missingImage: list.filter(a => !assetHasImage(a)).length,
+  }
+})
+const batchTargets = computed(() => batchPick(batchDialog.value.type, batchDialog.value.mode, batchDialog.value.force))
+const batchProgressPercent = computed(() => {
+  const { completed, total } = batchDialog.value
+  return total ? Math.min(100, Math.round((completed / total) * 100)) : 0
+})
+function batchModeCount(mode) {
+  return batchPick(batchDialog.value.type, mode, batchDialog.value.force).length
+}
+
+function openBatchDialog(type) {
+  if (batchDialog.value.running) return
+  const list = batchAssetList(type)
+  const label = BATCH_TARGETS.find(t => t.type === type)?.label || '资产'
+  if (!list.length) { toast.info(`本集还没有${label}，请先提取${label}`); return }
+  // 有缺提示词的先默认「生成提示词」，否则默认「生成图片」
+  const missingPrompt = list.filter(a => !assetHasPrompt(a)).length
+  batchDialog.value = {
+    open: true,
+    type,
+    mode: missingPrompt ? 'prompt' : 'image',
+    force: false,
+    running: false,
+    completed: 0,
+    total: 0,
+  }
+}
+function closeBatchDialog() {
+  if (batchDialog.value.running) return
+  batchDialog.value.open = false
+}
+
+/** 并发池：限制同时进行的请求数，避免一次性打满模型并发 */
+async function runBatchPool(items, limit, worker) {
+  const queue = [...items]
+  const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
+    while (queue.length) await worker(queue.shift())
   })
+  await Promise.all(workers)
+}
+
+/** 批量生成图片：角色走批量接口，场景/道具逐个提交（并发 2）；返回提交失败数量 */
+async function batchGenerateImages(type, ids) {
+  const label = BATCH_TARGETS.find(t => t.type === type)?.label || '资产'
+  const pending = type === 'character' ? pendingCharImageIds : type === 'scene' ? pendingSceneImageIds : pendingPropImageIds
+  // 记录提交前的图片地址：勾选「重新生成」时靠地址变化判断单张是否完成
+  const before = new Map(ids.map(id => [id, assetImageUrl(batchAssetList(type).find(a => a.id === id))]))
+  pending.value = [...new Set([...pending.value, ...ids])]
+  let failed = 0
+  try {
+    if (type === 'character') {
+      await characterAPI.batchImages(ids, epId.value, imageModel.value || undefined, ownerConfigId(imageModelOptions.value, imageModel.value), chatModelOverride(), chatConfigId())
+    } else {
+      await runBatchPool(ids, 2, async (id) => {
+        try {
+          await (type === 'scene' ? sceneAPI : propAPI).generateImage(id, epId.value, imageModel.value || undefined, ownerConfigId(imageModelOptions.value, imageModel.value), chatModelOverride(), chatConfigId())
+        } catch (e) {
+          failed++
+          pending.value = pending.value.filter(item => item !== id)
+          toast.error(e.message || `${label}图片提交失败`)
+        }
+      })
+    }
+  } catch (e) {
+    pending.value = pending.value.filter(item => !ids.includes(item))
+    toast.error(e.message || `批量生成${label}图片失败`)
+    return ids.length
+  }
+  if (failed < ids.length) {
+    toast.success(`${label}图片批量生成中`)
+    await refresh()
+    const watching = ids.filter(id => pending.value.includes(id))
+    watchAsyncResult(() => watching.every(id => {
+      const url = assetImageUrl(batchAssetList(type).find(a => a.id === id))
+      const done = !!url && url !== before.get(id)
+      if (done) pending.value = pending.value.filter(item => item !== id)
+      return done
+    }), 48)
+  }
+  return failed
+}
+
+async function startBatchGenerate() {
+  const dlg = batchDialog.value
+  if (dlg.running) return
+  const { type, mode, force } = dlg
+  const label = batchTypeLabel.value
+  // 已在生成中的资产跳过，避免重复提交
+  const ids = batchTargets.value
+    .map(a => a.id)
+    .filter(id => (mode === 'prompt' ? !isGeneratingPrompt(type, id) : !isAssetImagePending(type, id)))
+  if (!ids.length) { toast.info('没有需要处理的资产'); return }
+
+  dlg.running = true
+  dlg.total = ids.length
+  dlg.completed = 0
+  try {
+    if (mode === 'prompt') {
+      let failed = 0
+      await runBatchPool(ids, 3, async (id) => {
+        try {
+          const fp = await ensureAssetPrompt(type, id, force)
+          if (!fp) failed++
+        } catch {
+          failed++
+        } finally {
+          dlg.completed++
+        }
+      })
+      await refresh()
+      // 提示词完成后保持弹窗打开，方便用户接着切换「生成图片」
+      if (failed) toast.warning(`${label}提示词生成完成，${failed} 个失败，可稍后重试`)
+      else toast.success(`${label}提示词已批量生成`)
+    } else {
+      const failed = await batchGenerateImages(type, ids)
+      if (!failed) dlg.open = false
+    }
+  } finally {
+    dlg.running = false
+  }
 }
 async function genSceneImg(id) {
   try {
@@ -3111,32 +3337,6 @@ async function genPropImg(id) {
     pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
     toast.error(e.message)
   }
-}
-function batchSceneImages() {
-  const ids = scenes.value.filter(s => !(s.image_url || s.imageUrl)).map(s => s.id)
-  if (!ids.length) { toast.info('所有场景图片已生成'); return }
-  pendingSceneImageIds.value = [...new Set([...pendingSceneImageIds.value, ...ids])]
-  ids.forEach(id => { sceneAPI.generateImage(id, epId.value, imageModel.value || undefined, ownerConfigId(imageModelOptions.value, imageModel.value), chatModelOverride(), chatConfigId()).then(() => refresh()).catch(e => toast.error(e.message)) })
-  toast.success('场景图片批量生成中')
-  watchAsyncResult(() => ids.every(id => {
-    const scene = scenes.value.find(s => s.id === id)
-    const done = !!(scene?.image_url || scene?.imageUrl)
-    if (done) pendingSceneImageIds.value = pendingSceneImageIds.value.filter(item => item !== id)
-    return done
-  }), 36)
-}
-function batchPropImages() {
-  const ids = propItems.value.filter(p => !(p.image_url || p.imageUrl)).map(p => p.id)
-  if (!ids.length) { toast.info('所有道具图片已生成'); return }
-  pendingPropImageIds.value = [...new Set([...pendingPropImageIds.value, ...ids])]
-  ids.forEach(id => { propAPI.generateImage(id, epId.value, imageModel.value || undefined, ownerConfigId(imageModelOptions.value, imageModel.value), chatModelOverride(), chatConfigId()).then(() => refresh()).catch(e => toast.error(e.message)) })
-  toast.success('道具图片批量生成中')
-  watchAsyncResult(() => ids.every(id => {
-    const prop = propItems.value.find(p => p.id === id)
-    const done = !!(prop?.image_url || prop?.imageUrl)
-    if (done) pendingPropImageIds.value = pendingPropImageIds.value.filter(item => item !== id)
-    return done
-  }), 36)
 }
 function getVideoUrl(s) { return s?.video_url || s?.videoUrl || s?.composed_video_url || s?.composedVideoUrl || null }
 function hasVid(s) { return !!getVideoUrl(s) }
@@ -4694,6 +4894,70 @@ onMounted(async () => { await refresh(); loadConfigs(); syncExtractStatus() })
   box-shadow: none;
 }
 .asset-btn-batch:hover { background: var(--accent); color: #fff; }
+.asset-btn-caret { margin-left: -1px; opacity: 0.7; }
+
+/* 批量生成弹窗（提示词 / 图片 二选一） */
+.batch-dialog { width: 560px; max-width: calc(100vw - 48px); }
+.batch-dialog-body { display: flex; flex-direction: column; gap: 14px; }
+.batch-dialog-hint { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-3); }
+.batch-dialog-empty { margin: 0; font-size: 12px; color: var(--text-3); }
+.batch-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.batch-mode-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 13px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  transition: border-color 0.18s var(--ease-out), background 0.18s var(--ease-out), box-shadow 0.18s var(--ease-out);
+}
+.batch-mode-card:hover { border-color: var(--border-strong); }
+.batch-mode-card:disabled { opacity: 0.6; cursor: not-allowed; }
+.batch-mode-card.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 3px var(--button-focus);
+}
+.batch-mode-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+.batch-mode-card.active .batch-mode-title { color: var(--accent-text); }
+.batch-mode-desc { font-size: 11.5px; line-height: 1.6; color: var(--text-3); }
+.batch-mode-count { font: 600 11px var(--font-mono); color: var(--text-2); }
+.batch-mode-card.active .batch-mode-count { color: var(--accent-text); }
+.batch-force-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+.batch-force-row.disabled { opacity: 0.6; cursor: not-allowed; }
+.batch-force-row input { margin: 2px 0 0; accent-color: var(--accent); }
+.batch-force-copy { display: flex; flex-direction: column; gap: 2px; }
+.batch-force-title { font-size: 12.5px; font-weight: 600; color: var(--text-1); }
+.batch-force-hint { font-size: 11px; line-height: 1.5; color: var(--text-3); }
+.batch-progress { display: flex; align-items: center; gap: 10px; }
+.batch-progress .progress { flex: 1; }
+.batch-progress .dim { font-size: 11px; }
+.batch-progress-submitting {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
 
 /* 资产分区标题：新增入口 + 卡片删除按钮 */
 .asset-section-title { display: flex; align-items: center; gap: 8px; }
