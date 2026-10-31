@@ -66,6 +66,42 @@
               </div>
             </div>
           </section>
+          <section class="card quick-card">
+            <div class="quick-card-head">
+              <div class="setup-title">豆包快捷配置（火山方舟）</div>
+              <span class="tag">额度不足备用</span>
+            </div>
+            <p class="setup-desc">
+              输入火山方舟 API Key，一次写入豆包生图（Seedream）与生视频（Seedance）两条配置。
+              <a class="huobao-site-link" href="https://console.volcengine.com/ark" target="_blank" rel="noopener noreferrer">
+                前往方舟控制台开通模型 / 获取 Key
+                <ExternalLink :size="12" :stroke-width="1.8" />
+              </a>
+            </p>
+            <div class="huobao-quick-row">
+              <input v-model="arkApiKey" class="input" type="password" placeholder="火山方舟 API Key（Ark API Key）" />
+              <button class="btn btn-primary" :disabled="arkSaving" @click="applyArkQuickConfig">
+                <Loader2 v-if="arkSaving" :size="13" class="animate-spin" />
+                <Sparkles v-else :size="13" />
+                写入豆包配置
+              </button>
+            </div>
+            <label class="ark-default-toggle">
+              <input v-model="arkSetDefault" type="checkbox" />
+              <span>设为图片 / 视频默认（优先级高于现有配置，额度不足时直接接管）</span>
+            </label>
+            <div class="huobao-quick-models">
+              <div v-for="q in arkQuickConfigs" :key="q.service_type" class="hqm-row">
+                <span class="hqm-label">{{ serviceMeta[q.service_type].label }}</span>
+                <span class="hqm-models mono">
+                  <span v-for="(m, i) in q.model" :key="m" :class="['hqm-model', { 'is-default': i === 0 }]">
+                    {{ m }}<em v-if="i === 0">默认</em>
+                  </span>
+                </span>
+              </div>
+            </div>
+            <p class="ark-quick-hint">模型 ID 必须与方舟控制台已开通的一致；写入后可在下方列表点「编辑」改成控制台里的实际 ID。方舟仅有新用户免费额度，用尽后按量计费。</p>
+          </section>
           <section class="card setup-panel">
             <div class="setup-panel-head compact">
               <div>
@@ -473,6 +509,7 @@ const providerPresets = {
   image: {
     gemini: { label: 'Gemini 官方', baseUrl: 'https://generativelanguage.googleapis.com', models: ['gemini-3-pro-image', 'gemini-3.1-flash-image'] },
     openai: { label: 'OpenAI 官方', baseUrl: 'https://api.openai.com', models: ['gpt-image-2'] },
+    volcengine: { label: '豆包 Seedream 官方', baseUrl: 'https://ark.cn-beijing.volces.com', models: ['doubao-seedream-5-0-260128'] },
   },
   video: {
     volcengine: { label: 'Seedance 2.0 官方', baseUrl: 'https://ark.cn-beijing.volces.com', models: ['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128', 'doubao-seedance-2-0-mini-260615'] },
@@ -482,6 +519,16 @@ const huobaoQuickConfigs = [
   { service_type: 'text', provider: 'openai', name: '火宝文本服务', base_url: 'https://api.chatfire.site', model: ['gemini-3.1-pro-preview', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gpt-5.6-terra', 'deepseek-v4-flash'], priority: 100 },
   { service_type: 'image', provider: 'openai', name: '火宝图片服务', base_url: 'https://api.chatfire.site', model: ['gpt-image-2', 'gemini-3-pro-image', 'gemini-3.1-flash-image'], priority: 99 },
   { service_type: 'video', provider: 'volcengine', name: '火宝视频服务', base_url: 'https://api.chatfire.site/volcengine', model: ['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128', 'doubao-seedance-2-0-mini-260615'], priority: 98 },
+]
+
+// 豆包（火山方舟官方）快捷配置：生图 Seedream + 生视频 Seedance
+const ARK_BASE_URL = 'https://ark.cn-beijing.volces.com'
+const arkApiKey = ref('')
+const arkSaving = ref(false)
+const arkSetDefault = ref(true)
+const arkQuickConfigs = [
+  { service_type: 'image', provider: 'volcengine', name: '豆包生图（方舟）', base_url: ARK_BASE_URL, model: ['doubao-seedream-5-0-260128'], priority: 90 },
+  { service_type: 'video', provider: 'volcengine', name: '豆包生视频（方舟）', base_url: ARK_BASE_URL, model: ['doubao-seedance-2-0-fast-260128', 'doubao-seedance-2-0-260128', 'doubao-seedance-2-0-mini-260615'], priority: 90 },
 ]
 
 function byType(t) { return cfgs.value.filter(c => c.service_type === t) }
@@ -521,6 +568,30 @@ async function applyHuobaoQuickConfig() {
     toast.error(e.message)
   } finally {
     huobaoSaving.value = false
+  }
+}
+async function applyArkQuickConfig() {
+  const apiKey = arkApiKey.value.trim()
+  if (!apiKey) { toast.warning('请填写火山方舟 API Key'); return }
+  arkSaving.value = true
+  try {
+    for (const preset of arkQuickConfigs) {
+      // 勾选「设为默认」时，把豆包配置排到同类型最前，额度不足可立即接管
+      const sameType = cfgs.value.filter(c => c.service_type === preset.service_type && c.name !== preset.name)
+      const topPriority = sameType.reduce((max, c) => Math.max(max, c.priority || 0), 0)
+      const priority = arkSetDefault.value ? topPriority + 1 : preset.priority
+      const payload = { ...preset, priority, api_key: apiKey }
+      const existing = cfgs.value.find(c => c.name === preset.name)
+      if (existing) await aiConfigAPI.update(existing.id, payload)
+      else await aiConfigAPI.create(payload)
+    }
+    toast.success('豆包图片 / 视频配置已写入')
+    arkApiKey.value = ''
+    await loadCfgs()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    arkSaving.value = false
   }
 }
 function startAddCfg(t) {
@@ -1031,6 +1102,22 @@ onMounted(() => { loadCfgs(); loadAgents(); loadAllSkills(); loadStylePresets() 
   display: flex;
   flex-direction: column;
   gap: 7px;
+}
+.ark-default-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.ark-default-toggle input { accent-color: var(--accent); cursor: pointer; }
+.ark-quick-hint {
+  margin: 10px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-3);
 }
 .hqm-row {
   display: flex;

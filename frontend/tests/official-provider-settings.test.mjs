@@ -66,7 +66,11 @@ test('settings page offers official default model IDs', () => {
   assert.doesNotMatch(settingsPage, /gpt-image-1/)
   assert.doesNotMatch(settingsPage, /gemini-3-pro-image-preview/)
   assert.doesNotMatch(settingsPage, /gemini-3\.1-flash-image-preview/)
-  assert.doesNotMatch(settingsPage, /doubao-seedream/)
+  // 豆包生图（Seedream）已作为火山方舟官方图片能力开放
+  assert.match(settingsPage, /doubao-seedream-5-0-260128/)
+  assert.match(settingsPage, /applyArkQuickConfig/)
+  assert.doesNotMatch(settingsPage, /doubao-seedream-3-0/)
+  assert.doesNotMatch(settingsPage, /doubao-seededit/)
   assert.doesNotMatch(settingsPage, /speech-2\.8-hd/)
 })
 
