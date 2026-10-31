@@ -2864,6 +2864,19 @@ function doBreakdown() {
 - 只有纯环境空镜头才可以不绑定角色`, dramaId, epId.value, refresh, chatModelOverride(), chatConfigId())
 }
 
+/** 该分镜最近一次视频生成失败原因：优先本次会话的即时错误，其次任务列表里持久化的失败记录 */
+function lastVideoFailMessage(sb) {
+  if (!sb) return ''
+  const live = failedVideoMessages.value[sb.id]
+  if (live) return live
+  const failed = genTasks.value
+    .filter(t => t.type === 'video' && t.status === 'failed'
+      && String(t.storyboard_id ?? t.storyboardId) === String(sb.id)
+      && (t.error_msg || t.errorMsg))
+    .sort((a, b) => (b.created_at || b.createdAt || '').localeCompare(a.created_at || a.createdAt || ''))
+  return failed[0]?.error_msg || failed[0]?.errorMsg || ''
+}
+
 // 按需为单个分镜生成视频提示词：由 prompt_generator 读取分镜字段生成并保存到 video_prompt
 function genVideoPrompt(sb) {
   if (!sb) return
@@ -2872,9 +2885,18 @@ function genVideoPrompt(sb) {
   const label = cfg ? `${cfg.name} (${cfg.provider})` : '默认'
   const charNames = getStoryboardCharacters(sb).map(c => c.name).join('、') || '无'
   const propNames = getStoryboardProps(sb).map(p => p.name).join('、') || '无'
+  // 视频已生成过且失败：把报错带给模型，让它针对性规避问题
+  const failMsg = videoTaskState(sb) === 'failed' ? lastVideoFailMessage(sb) : ''
+  const failSection = failMsg ? `
+
+上次使用原提示词生成视频失败,错误信息:
+"""
+${failMsg}
+"""
+请先判断该错误的成因(如触发内容审核、参考素材/@引用无效、时长或分辨率不被该模型支持、提示词描述冲突等),并针对性重写 video_prompt 规避该问题;不要原样重复导致失败的写法,也不要提及"报错/失败"等字样。` : ''
   runAgent('prompt_generator', `请为分镜 #${idx}(ID:${sb.id})生成视频提示词(video_prompt)。视频模型:${label},请根据该模型的特性和时长限制生成。
 
-该分镜信息:时长 ${sb.duration || 10}s;场景:${getSceneName(sb) || '未绑定'};角色:${charNames};道具:${propNames}。
+该分镜信息:时长 ${sb.duration || 10}s;场景:${getSceneName(sb) || '未绑定'};角色:${charNames};道具:${propNames}。${failSection}
 
 请先调用 read_storyboard_context 获取该分镜的画面描述、动作、氛围、对白/旁白,据此生成 video_prompt(按 3 秒分段换行、用 @角色名/@场景名/@道具名 引用参考素材),然后调用 update_storyboard 保存到分镜 ID:${sb.id}。只更新 video_prompt 字段,不要改动其他字段,不要重新拆分整集。`, dramaId, epId.value, refresh, chatModelOverride(), chatConfigId())
 }
