@@ -3,6 +3,12 @@ export default defineNuxtConfig({
   // srcDir 为 app/ 时，public 默认会被解析到 app/public；显式指回项目根目录的 public
   dir: { public: '../public' },
   ssr: false,
+  // 静态产物直接输出到 frontend/dist（后端 serveStatic 使用），不再落到 .output/public
+  nitro: {
+    output: {
+      publicDir: 'dist',
+    },
+  },
   devtools: { enabled: false },
   experimental: {
     appManifest: false,

@@ -89,7 +89,7 @@ From the repository root you can also use:
 ```bash
 npm run dev:backend     # cd backend && npm run dev
 npm run dev:frontend    # cd frontend && npm run dev
-npm run build:frontend  # cd frontend && npm run generate
+npm run build:frontend  # cd frontend && npm run build，产物输出到 frontend/dist
 ```
 
 ## Configuration
