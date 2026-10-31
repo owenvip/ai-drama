@@ -309,6 +309,49 @@ async function failTask(id: number, message: string) {
 
 type SysTaskRecord = typeof schema.sysTask.$inferSelect
 
+/** 解析历史任务对应的 AI 配置：优先当前启用配置，其次按记录里的 provider 匹配 */
+async function resolveTaskConfig(record: SysTaskRecord): Promise<AIConfig | null> {
+  const type = record.type as TaskType
+  const active = await getActiveConfig(type)
+  if (active && (!record.provider || active.provider === record.provider)) return active
+
+  const rows = await db.select().from(schema.aiServiceConfigs)
+    .where(eq(schema.aiServiceConfigs.serviceType, type))
+  const matched = rows
+    .filter(r => r.isActive && (!record.provider || r.provider === record.provider))
+    .sort((a, b) => (b.priority || 0) - (a.priority || 0))[0]
+  if (!matched) return null
+
+  const models = matched.model ? JSON.parse(matched.model) : []
+  return {
+    provider: matched.provider || '',
+    baseUrl: matched.baseUrl,
+    apiKey: matched.apiKey,
+    model: models[0] || '',
+  }
+}
+
+/**
+ * 服务重启后恢复仍在 processing 的异步任务，避免轮询随进程退出而永久卡住。
+ * 只恢复已有 task_id 的任务；task_id 为空说明提交阶段未完成，需要用户重新发起。
+ */
+export async function resumeProcessingTasks(): Promise<void> {
+  const rows = await db.select().from(schema.sysTask)
+    .where(eq(schema.sysTask.status, 'processing'))
+  const resumable = rows.filter(r => !!r.taskId)
+  if (!resumable.length) return
+
+  logTaskProgress('SysTask', 'resume-processing', { count: resumable.length })
+  for (const record of resumable) {
+    const config = await resolveTaskConfig(record)
+    if (!config) {
+      logTaskWarn('SysTask', 'resume-config-missing', { id: record.id, type: record.type, provider: record.provider })
+      continue
+    }
+    pollTask(record, config, record.taskId!).catch(err => failTask(record.id, err.message))
+  }
+}
+
 async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string) {
   const type = record.type as TaskType
   const label = taskLabel(type)
@@ -340,7 +383,17 @@ async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string)
         headers,
         signal: AbortSignal.timeout(remainingMs),
       })
-      if (!resp.ok) continue
+      if (!resp.ok) {
+        const detail = await resp.text().catch(() => '')
+        logTaskWarn(label, 'poll-http-error', {
+          id: record.id,
+          taskId,
+          attempt: i + 1,
+          status: resp.status,
+          body: detail.slice(0, 500),
+        })
+        continue
+      }
       const result = await resp.json() as any
 
       // 图片/视频 PollResponse 结构不同，这里统一按 any 取值后按 type 分支
@@ -368,6 +421,8 @@ async function pollTask(record: SysTaskRecord, config: AIConfig, taskId: string)
           logTaskSuccess(label, 'poll-complete', { id: record.id, taskId, videoUrl: pollResp.videoUrl })
           await handleVideoComplete(record, pollResp.videoUrl, null, pollResp.videoHeaders)
           return
+        } else {
+          logTaskWarn(label, 'poll-completed-without-url', { id: record.id, taskId, attempt: i + 1 })
         }
       }
       if (pollResp.status === 'failed') {

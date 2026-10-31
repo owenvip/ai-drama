@@ -94,9 +94,32 @@ function normalizeStatus(status: unknown): VideoPollResponse['status'] {
 }
 
 function extractError(result: any): string {
-  if (typeof result?.error === 'string') return result.error
-  if (typeof result?.error?.message === 'string') return result.error.message
+  const payload = unwrapTaskPayload(result)
+  if (typeof payload?.fail_reason === 'string' && payload.fail_reason.trim()) return payload.fail_reason
+  if (typeof payload?.error === 'string') return payload.error
+  if (typeof payload?.error?.message === 'string') return payload.error.message
+  if (typeof payload?.message === 'string' && payload.message.trim()) return payload.message
   return 'Video generation failed'
+}
+
+/**
+ * New API（如 Geega TokenHub）的视频任务查询会把任务对象再包一层：
+ * { code: 'success', message: '', data: { task_id, status, result_url, data: { content: { video_url } } } }
+ * 标准 OpenAI 视频协议则直接返回 { id, status, metadata }。
+ * 这里统一解包，避免只看顶层 status 而一直判定为 processing。
+ */
+function unwrapTaskPayload(result: any): any {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return result
+
+  const data = result.data
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return result
+
+  const looksLikeTask = data.status !== undefined
+    || data.task_id !== undefined
+    || data.result_url !== undefined
+    || data.fail_reason !== undefined
+
+  return looksLikeTask ? data : result
 }
 
 function pickVideoUrl(result: any): string | null {
@@ -105,9 +128,12 @@ function pickVideoUrl(result: any): string | null {
     result?.url,
     result?.content?.video_url,
     result?.content?.url,
+    result?.result?.video_url,
+    result?.result?.url,
     result?.data?.video_url,
     result?.data?.url,
     result?.data?.content?.video_url,
+    result?.data?.output?.video_url,
     result?.output?.video_url,
     result?.output?.url,
     result?.metadata?.video_url,
@@ -283,9 +309,11 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
   }
 
   parsePollResponse(result: any, config?: AIConfig, taskId?: string): VideoPollResponse {
-    const status = normalizeStatus(result?.status)
+    // New API 外层包装需先解包；标准 OpenAI 响应会原样返回。
+    const payload = unwrapTaskPayload(result)
+    const status = normalizeStatus(payload?.status)
     if (status === 'completed') {
-      const videoUrl = pickVideoUrl(result)
+      const videoUrl = pickVideoUrl(payload)
       if (videoUrl) {
         return {
           status: 'completed',
@@ -295,7 +323,7 @@ export class VolcEngineVideoAdapter implements VideoProviderAdapter {
 
       // OpenAI 兼容网关的查询响应不包含视频地址，需从 /v1/videos/:id/content 下载。
       if (config && isOpenAIVideoGateway(config.baseUrl)) {
-        const id = taskId || pickTaskId(result)
+        const id = taskId || pickTaskId(payload)
         if (id) {
           return {
             status: 'completed',

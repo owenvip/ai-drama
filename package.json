@@ -8,8 +8,8 @@
     "restart:backend": "lsof -ti tcp:5679 | xargs kill -9 2>/dev/null || true; sleep 1; cd backend && npm start",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:desktop": "cd desktop && npm run dev",
-    "build:frontend": "cd frontend && npm run build",
-    "hmr": "npm run build:frontend && npm run restart:backend",
+    "build": "cd frontend && npm run build",
+    "hmr": "npm run build && npm run restart:backend",
     "dist": "cd desktop && npm run dist"
   }
 }

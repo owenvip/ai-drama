@@ -20,6 +20,7 @@ import agent from './routes/agent.js'
 import merge from './routes/merge.js'
 import skills from './routes/skills.js'
 import props from './routes/props.js'
+import { resumeProcessingTasks } from './services/generation.js'
 import { requestLogger, errorHandler } from './middleware/logger.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -69,3 +70,8 @@ app.get('*', serveStatic({ root: distPath, path: 'index.html' }))
 const port = Number(process.env.PORT || 5679)
 console.log(`🚀 Huobao Drama TS server on http://localhost:${port}`)
 serve({ fetch: app.fetch, port })
+
+// 恢复服务重启前仍在轮询的异步生成任务
+resumeProcessingTasks().catch(err => {
+  console.error('[SysTask] resume processing failed:', err)
+})

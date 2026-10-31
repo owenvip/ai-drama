@@ -103,6 +103,8 @@ export const taskAPI = {
   },
   // 按集聚合生成任务（sys_task + video_merges）
   listByEpisode: (episodeId: number) => api.get<{ tasks: any[]; merges: any[] }>(`/episodes/${episodeId}/generation-tasks`),
+  // 清除该集所有失败任务（失败 sys_task 删除、失败拼接软删）
+  clearFailed: (episodeId: number) => api.del<{ deleted_tasks: number; deleted_merges: number }>(`/episodes/${episodeId}/generation-tasks/failed`),
 }
 
 async function uploadReq<T = any>(path: string, file: File): Promise<T> {

@@ -803,7 +803,11 @@
                 </div>
               </section>
 
-              <div v-if="selectedSb" class="video-task-side">
+              <div
+                v-if="selectedSb"
+                :class="['video-task-side', { 'has-history': !!sbVideoHistory.length }]"
+                :style="{ '--video-player-h': videoPlayerHeight + 'px' }"
+              >
               <aside class="video-task-player">
                 <div class="video-player-head">
                   <div class="video-player-head-info">
@@ -855,6 +859,14 @@
                     </button>
                   </div>
                 </div>
+                <div
+                  class="video-player-resizer"
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="拖动调节视频预览高度"
+                  title="拖动调节视频预览高度"
+                  @pointerdown.prevent="startPlayerResize"
+                ></div>
               </aside>
 
               <div v-if="sbVideoHistory.length" class="video-player-history">
@@ -1122,6 +1134,11 @@
               <button class="btn btn-sm" @click="loadGenTasks">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 刷新
+              </button>
+              <button class="btn btn-sm" :disabled="clearingFailedTasks" @click="clearFailedTasks">
+                <Loader2 v-if="clearingFailedTasks" :size="11" class="animate-spin" />
+                <svg v-else width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                清除失败
               </button>
               <button class="btn btn-ghost btn-icon" @click="closeTaskDrawer"><X :size="14" /></button>
             </div>
@@ -1649,6 +1666,30 @@ const pendingPropImageIds = ref([])
 const pendingVideoIds = ref([])
 const uploadingAssetImageKeys = ref([])
 const failedVideoMessages = ref({})
+// 视频预览高度：默认 350px，拖动播放器底部把手可调节
+const videoPlayerHeight = ref(350)
+const VIDEO_PLAYER_MIN_H = 220
+const VIDEO_PLAYER_MAX_H = 900
+let playerResizeStart = null
+function onPlayerResizeMove(e) {
+  if (!playerResizeStart) return
+  const next = playerResizeStart.height + (e.clientY - playerResizeStart.y)
+  videoPlayerHeight.value = Math.min(VIDEO_PLAYER_MAX_H, Math.max(VIDEO_PLAYER_MIN_H, Math.round(next)))
+}
+function stopPlayerResize() {
+  playerResizeStart = null
+  window.removeEventListener('pointermove', onPlayerResizeMove)
+  window.removeEventListener('pointerup', stopPlayerResize)
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
+}
+function startPlayerResize(e) {
+  playerResizeStart = { y: e.clientY, height: videoPlayerHeight.value }
+  window.addEventListener('pointermove', onPlayerResizeMove)
+  window.addEventListener('pointerup', stopPlayerResize)
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'ns-resize'
+}
 // 任务列表面板：顶栏按钮触发的右侧抽屉,按集聚合 sys_task + video_merges
 const genTasks = ref([])
 const genMerges = ref([])
@@ -1963,6 +2004,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleImageViewerKeydown)
   stopGenTasksPolling()
+  stopPlayerResize()
 })
 
 function isPendingSceneImage(id) {
@@ -2102,6 +2144,30 @@ const genTaskFailedCount = computed(() =>
   genTasks.value.filter(t => t.status === 'failed').length +
   genMerges.value.filter(m => m.status === 'failed').length
 )
+
+// 清除失败任务：删除本集失败的生成任务 / 拼接记录，并清掉镜头上的失败提示
+const clearingFailedTasks = ref(false)
+async function clearFailedTasks() {
+  if (clearingFailedTasks.value || !epId.value) return
+  const failedTaskCount = genTasks.value.filter(t => t.status === 'failed').length
+  const failedMergeCount = genMerges.value.filter(m => m.status === 'failed').length
+  const failedVideoCount = Object.keys(failedVideoMessages.value).length
+  if (!failedTaskCount && !failedMergeCount && !failedVideoCount) {
+    toast.warning('暂无失败任务需要清除')
+    return
+  }
+  clearingFailedTasks.value = true
+  try {
+    await taskAPI.clearFailed(epId.value)
+    failedVideoMessages.value = {}
+    await Promise.all([loadGenTasks(), loadExportMerges()])
+    toast.success('已清除失败任务')
+  } catch (e) {
+    toast.error(e.message || '清除失败任务失败')
+  } finally {
+    clearingFailedTasks.value = false
+  }
+}
 
 function genTaskTargetLabel(t) {
   if (t.storyboard_id) {
@@ -4885,9 +4951,12 @@ onMounted(async () => { await refresh(); loadConfigs(); syncExtractStatus() })
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: minmax(160px, 30%) auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   border-left: 1px solid var(--border);
   background: var(--surface-muted);
+}
+.video-task-side:not(.has-history) {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 .video-task-side .video-task-inspector {
   border-left: 0;
@@ -5013,12 +5082,35 @@ onMounted(async () => { await refresh(); loadConfigs(); syncExtractStatus() })
 .video-player-title { color: var(--text-0); font-size: 13px; font-weight: 700; white-space: nowrap; }
 .video-player-sub { color: var(--text-3); font-size: 11px; white-space: nowrap; }
 .video-player-stage {
-  flex: 1;
-  min-height: 0;
+  flex: 0 0 auto;
+  height: var(--video-player-h, 350px);
+  min-height: 120px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #0b0d10;
+}
+.video-player-resizer {
+  flex: 0 0 auto;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-raised);
+  border-top: 1px solid var(--surface-outline);
+  cursor: ns-resize;
+  touch-action: none;
+}
+.video-player-resizer::after {
+  content: '';
+  width: 46px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background .15s ease;
+}
+.video-player-resizer:hover::after {
+  background: var(--accent);
 }
 .video-player-video {
   width: 100%;

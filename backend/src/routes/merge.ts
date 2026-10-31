@@ -37,7 +37,7 @@ app.post('/episodes/:id/merge', async (c) => {
 app.get('/episodes/:id/merge', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const merges = await db.select().from(schema.videoMerges)
-    .where(eq(schema.videoMerges.episodeId, episodeId))
+    .where(and(eq(schema.videoMerges.episodeId, episodeId), isNull(schema.videoMerges.deletedAt)))
 
 
   const latest = merges[merges.length - 1]

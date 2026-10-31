@@ -256,6 +256,47 @@ app.get('/:id/generation-tasks', async (c) => {
   })
 })
 
+// DELETE /episodes/:id/generation-tasks/failed — 清除本集失败任务（sys_task 硬删 + video_merges 软删）
+app.delete('/:id/generation-tasks/failed', async (c) => {
+  const episodeId = Number(c.req.param('id'))
+  const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
+  if (!ep) return notFound(c, 'Episode not found')
+
+  const sbs = await db.select().from(schema.storyboards).where(eq(schema.storyboards.episodeId, episodeId))
+  const storyboardIds = new Set(sbs.map(s => s.id))
+
+  const epScenes = await db.select().from(schema.episodeScenes).where(eq(schema.episodeScenes.episodeId, episodeId))
+  const sceneIds = new Set(epScenes.map(r => r.sceneId))
+  const directScenes = await db.select().from(schema.scenes).where(eq(schema.scenes.episodeId, episodeId))
+  directScenes.forEach(s => sceneIds.add(s.id))
+
+  const epChars = await db.select().from(schema.episodeCharacters).where(eq(schema.episodeCharacters.episodeId, episodeId))
+  const characterIds = new Set(epChars.map(r => r.characterId))
+
+  const dramaProps = await db.select().from(schema.props).where(eq(schema.props.dramaId, ep.dramaId))
+  const propIds = new Set(dramaProps.map(p => p.id))
+
+  const failedTasks = (await db.select().from(schema.sysTask).where(eq(schema.sysTask.dramaId, ep.dramaId)))
+    .filter(t => t.status === 'failed' && (
+      (t.storyboardId && storyboardIds.has(t.storyboardId)) ||
+      (t.sceneId && sceneIds.has(t.sceneId)) ||
+      (t.characterId && characterIds.has(t.characterId)) ||
+      (t.propId && propIds.has(t.propId))
+    ))
+  for (const t of failedTasks) {
+    await db.delete(schema.sysTask).where(eq(schema.sysTask.id, t.id))
+  }
+
+  const failedMerges = (await db.select().from(schema.videoMerges)
+    .where(and(eq(schema.videoMerges.episodeId, episodeId), isNull(schema.videoMerges.deletedAt))))
+    .filter(m => m.status === 'failed')
+  for (const m of failedMerges) {
+    await db.update(schema.videoMerges).set({ deletedAt: now() }).where(eq(schema.videoMerges.id, m.id))
+  }
+
+  return success(c, { deleted_tasks: failedTasks.length, deleted_merges: failedMerges.length })
+})
+
 app.get('/:id/pipeline-status', async (c) => {
   const episodeId = Number(c.req.param('id'))
   const [ep] = await db.select().from(schema.episodes).where(eq(schema.episodes.id, episodeId))
